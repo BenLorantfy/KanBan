@@ -10,11 +10,6 @@ CREATE DATABASE KanBan;
 USE KanBan;
 
 --
--- Adjusted time
---
-SET @stationTime = 0;
-
---
 -- Change this variable's value to make things faster or slower
 -- (e.g. "2" twice as fast, "3" thrice as fast, "0.5" half as fast)
 -- All times should be in seconds because the database engine doesn't like intervals less than 1
@@ -36,8 +31,7 @@ SET GLOBAL event_scheduler = ON;
 --
 CREATE TABLE Item (
 	id INT AUTO_INCREMENT PRIMARY KEY,
-	name VARCHAR(30),
-	starting_stock_level INT
+	name VARCHAR(30)
 );
 
 --
@@ -54,8 +48,11 @@ CREATE TABLE Bin(
 	-- Number of items in bin
 	stock_level INT,
 	
+	-- Starting stock level
+	default_stock_level INT,
+	
 	-- Wether or not the tray has been picked up by the runner and is being replaced
-	currently_replacing INT
+	currently_replacing BOOL
 );
 
 --
@@ -109,6 +106,7 @@ CREATE TABLE Worker(
 	
 	-- how much time worker needs to finish his work
 	timeToFinish INT,
+	
 	-- experience level of a worker
 	experience VARCHAR(30)
 );
@@ -143,10 +141,10 @@ DO BEGIN
 	ON
 		Bin.item_id = Item.id
 	SET 
-		Bin.stock_level = Item.starting_stock_level,
-		Bin.currently_replacing = 0
+		Bin.stock_level = Bin.stock_level + Bin.default_stock_level,
+		Bin.currently_replacing = FALSE
 	WHERE 
-		Bin.currently_replacing = 1;
+		Bin.currently_replacing = TRUE;
 		
 	--
 	-- Check bins that are low (under 5 items) and tell runner to go get a replacment bin
@@ -156,7 +154,7 @@ DO BEGIN
 	UPDATE 
 		Bin
 	SET
-		currently_replacing = 1
+		currently_replacing = TRUE
 	WHERE
 		stock_level <= @low_bin_stock;
 END$$
@@ -167,23 +165,28 @@ END$$
 CREATE EVENT checkCompletion
 ON SCHEDULE EVERY 1 SECOND
 DO BEGIN
-	-- Update station time
-	SET @stationTime = @stationTime + @time_stretch;
-	
 	--
-	-- Start a new product at each station that is done
-	-- Essentially this means updating startedTimeStamp with current time
-	-- TODO: Don't let station start again and don't create product if they're aren't enough items in bins
+	-- Decrease each worker's timeToFinish
 	--
 	UPDATE 
-		Station
+		Worker
 	SET
-		startedTimeStamp = @stationTime,
-		completionDuration = 60
+		timeToFinish = timeToFinish - @time_stretch
 	WHERE
-		startedTimeStamp + completionDuration >= @stationTime
-	LIMIT 
-		(SELECT MIN(stock_level) FROM Bin);
+		timeToFinish > 0;
+		
+	--
+	-- If worker is done, start a new product
+	--
+	UPDATE
+		Worker
+	SET
+		-- Todo: Generate timeToFinish based on worker experience
+		timeToFinish = 60
+	WHERE
+		timeToFinish <= 0;
+--	LIMIT
+--		(SELECT MIN(stock_level) FROM Bin);
 		
 	--
 	-- Decrease all bins by the number of stations completed, down to 0
