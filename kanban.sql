@@ -64,7 +64,7 @@ CREATE TABLE Bin(
 --
 CREATE TABLE Station (
 	id INT AUTO_INCREMENT PRIMARY KEY,
-	workerId INT,
+	worker_id INT,
 	timeToFinish INT
 );
 
@@ -108,8 +108,13 @@ CREATE TABLE Lamp(
 CREATE TABLE Worker(
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
-	-- how much time worker needs to finish his work
-	timeToFinish INT,
+	--
+	-- Regular workers efficiency is 1
+	-- New workers efficiency is 1.5
+	-- Super experienced workers efficiency is 0.85
+	-- Lower number is better efficency
+	--
+	efficiency DOUBLE,
 	
 	-- experience level of a worker
 	experience VARCHAR(30)
@@ -195,9 +200,13 @@ DO BEGIN
 		Station
 	ON
 		Bin.station_id = Station.id
+	JOIN
+		Worker
+	ON
+		Station.worker_id = Worker.id
 	SET
-		-- Todo: Generate timeToFinish based on worker experience
-		Station.timeToFinish = 60,
+		-- Generates a new timeToFinish based on worker efficency and a random element
+		Station.timeToFinish = 60 * Worker.efficiency * RAND() * 0.1,
 		Bin.stock_level = Bin.stock_level - 1
 	WHERE
 		Station.timeToFinish <= 0 AND 
