@@ -69,12 +69,57 @@ CREATE TABLE Station (
 );
 
 --
+-- Create test tray table
+-- Keeps track of test trays where worker put their completed lamps in.
+-- Has a capacity indicating how many items can be storred in the tray
+--
+CREATE TABLE Tray(
+	id INT AUTO_INCREMENT PRIMARY KEY,
+	
+	-- How many items can tray fit
+	capacity INT
+);
+
+--
+-- Create lamp table
+-- Keeps track of all completed lamps
+-- Has id of a tray where it is storred in, and id of a station where it was assembled
+-- Also, has a bool indicating if lamp if defected or not
+--
+CREATE TABLE Lamp(
+	id INT AUTO_INCREMENT PRIMARY KEY,
+	
+	-- id of a tray where lamp is storred
+	trayId INT,
+	-- id of a station where lamp was assembled
+	stationId INT,
+
+	-- is item defected or not
+	defected BOOL
+);
+
+--
+-- Create worker table
+-- Keeps track of all workers working on assembly line
+-- Each worker has a specific experience level
+-- Also, each worker has a time to finish his job. If time is < 0, worker is not working right now 
+--
+CREATE TABLE Worker(
+	id INT AUTO_INCREMENT PRIMARY KEY,
+	
+	-- how much time worker needs to finish his work
+	timeToFinish INT,
+	-- experience level of a worker
+	experience VARCHAR(30)
+);
+
+--
 -- Sets delimiter to $$ temporarily
 --
 -- $$ is used to end the event statement
 -- If we didn't do this, the sql inside the event with the regular delimiter would end the event statement
 -- We don't have to use the special delimiter inside the event, because that sql isn't run immediatly, 
---	and the delimiter is changed back before it runs
+-- and the delimiter is changed back before it runs
 --
 DELIMITER $$
 
@@ -136,7 +181,9 @@ DO BEGIN
 		startedTimeStamp = @stationTime,
 		completionDuration = 60
 	WHERE
-		startedTimeStamp + completionDuration >= @stationTime;
+		startedTimeStamp + completionDuration >= @stationTime
+	LIMIT 
+		(SELECT MIN(stock_level) FROM Bin);
 		
 	--
 	-- Decrease all bins by the number of stations completed, down to 0
@@ -149,3 +196,10 @@ DO BEGIN
 END$$
 
 DELIMITER ;
+
+CREATE TRIGGER placeOnTray
+BEFORE INSERT
+ON Tray
+FOR EACH ROW
+BEGIN
+END;
