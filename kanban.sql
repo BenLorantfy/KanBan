@@ -14,7 +14,7 @@ USE KanBan;
 -- (e.g. "2" twice as fast, "3" thrice as fast, "0.5" half as fast)
 -- All times should be in seconds because the database engine doesn't like intervals less than 1
 --
-SET @time_stretch = 60;
+SET @time_stretch = 2;
 
 --
 -- This constant stores the maximum number of items a bin needs to be replaced
@@ -31,7 +31,11 @@ SET GLOBAL event_scheduler = ON;
 --
 CREATE TABLE Item (
 	id INT AUTO_INCREMENT PRIMARY KEY,
-	name VARCHAR(30)
+	
+	name VARCHAR(30),
+	
+	-- Starting stock level
+	default_stock_level INT
 );
 
 --
@@ -45,11 +49,11 @@ CREATE TABLE Bin(
 	-- Id of item the bin contains
 	item_id INT,
 	
+	-- Station bin belongs to
+	station_id INT,
+	
 	-- Number of items in bin
 	stock_level INT,
-	
-	-- Starting stock level
-	default_stock_level INT,
 	
 	-- Wether or not the tray has been picked up by the runner and is being replaced
 	currently_replacing BOOL
@@ -61,8 +65,7 @@ CREATE TABLE Bin(
 CREATE TABLE Station (
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	workerId INT,
-	completionDuration INT,
-	startedTimeStamp INT
+	timeToFinish INT
 );
 
 --
@@ -88,6 +91,7 @@ CREATE TABLE Lamp(
 	
 	-- id of a tray where lamp is storred
 	trayId INT,
+	
 	-- id of a station where lamp was assembled
 	stationId INT,
 
@@ -141,7 +145,7 @@ DO BEGIN
 	ON
 		Bin.item_id = Item.id
 	SET 
-		Bin.stock_level = Bin.stock_level + Bin.default_stock_level,
+		Bin.stock_level = Bin.stock_level + Item.default_stock_level,
 		Bin.currently_replacing = FALSE
 	WHERE 
 		Bin.currently_replacing = TRUE;
@@ -169,32 +173,35 @@ DO BEGIN
 	-- Decrease each worker's timeToFinish
 	--
 	UPDATE 
-		Worker
+		Station
 	SET
 		timeToFinish = timeToFinish - @time_stretch
 	WHERE
 		timeToFinish > 0;
 		
-	--
-	-- If worker is done, start a new product
-	--
-	UPDATE
-		Worker
-	SET
-		-- Todo: Generate timeToFinish based on worker experience
-		timeToFinish = 60
-	WHERE
-		timeToFinish <= 0;
---	LIMIT
---		(SELECT MIN(stock_level) FROM Bin);
 		
 	--
-	-- Decrease all bins by the number of stations completed, down to 0
+	-- Todo: insert lamp here
+	-- Use ROW_COUNT to get number of lamps completed
+	--
+		
+	--
+	-- Reset station completion time for stations that are done
+	-- Decrease stock level in bins by 1
 	--
 	UPDATE
 		Bin
+	JOIN 
+		Station
+	ON
+		Bin.station_id = Station.id
 	SET
-		stock_level = GREATEST(stock_level - ROW_COUNT(),0);
+		-- Todo: Generate timeToFinish based on worker experience
+		Station.timeToFinish = 60,
+		Bin.stock_level = Bin.stock_level - 1
+	WHERE
+		Station.timeToFinish <= 0 AND 
+		Bin.stock_level > 0;
 		
 END$$
 
