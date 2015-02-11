@@ -206,7 +206,7 @@ DO BEGIN
 		Station.worker_id = Worker.id
 	SET
 		-- Generates a new timeToFinish based on worker efficency and a random element
-		Station.timeToFinish = 60 * Worker.efficiency * RAND() * 0.1,
+		Station.timeToFinish = 60 * Worker.efficiency * RAND() * 0.1 + Station.timeToFinish,
 		Bin.stock_level = Bin.stock_level - 1
 	WHERE
 		Station.timeToFinish <= 0 AND 
