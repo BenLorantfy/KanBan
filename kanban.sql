@@ -12,17 +12,11 @@ CREATE DATABASE KanBan;
 USE KanBan;
 
 --
--- Adjusted time
---
-SET @stationTime = 0;
-
---
 -- Change this variable's value to make things faster or slower
 -- (e.g. "2" twice as fast, "3" thrice as fast, "0.5" half as fast)
 -- All times should be in seconds because the database engine doesn't like intervals less than 1
 --
-
-SET @time_stretch = 60;
+SET @time_stretch = 2;
 
 --
 -- This constant stores the maximum number of items a bin needs to be replaced
@@ -42,8 +36,11 @@ SET GLOBAL event_scheduler = ON;
 
 CREATE TABLE Item (
 	id INT AUTO_INCREMENT PRIMARY KEY,
+	
 	name VARCHAR(30),
-	starting_stock_level INT
+	
+	-- Starting stock level
+	default_stock_level INT
 );
 
 --
@@ -59,13 +56,15 @@ CREATE TABLE Bin(
 
 	item_id INT,
 	
+	-- Station bin belongs to
+	station_id INT,
+	
 	-- Number of items in bin
 
 	stock_level INT,
 	
 	-- Wether or not the tray has been picked up by the runner and is being replaced
-
-	currently_replacing INT
+	currently_replacing BOOL
 );
 
 --
@@ -74,9 +73,8 @@ CREATE TABLE Bin(
 
 CREATE TABLE Station (
 	id INT AUTO_INCREMENT PRIMARY KEY,
-	workerId INT,
-	completionDuration INT,
-	startedTimeStamp INT
+	worker_id INT,
+	timeToFinish INT
 );
 
 --
@@ -106,6 +104,7 @@ CREATE TABLE Lamp(
 	-- id of a tray where lamp is storred
 
 	trayId INT,
+	
 	-- id of a station where lamp was assembled
 
 	stationId INT,
@@ -125,12 +124,16 @@ CREATE TABLE Lamp(
 CREATE TABLE Worker(
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
-	-- how much time worker needs to finish his work
+	--
+	-- Regular workers efficiency is 1
+	-- New workers efficiency is 1.5
+	-- Super experienced workers efficiency is 0.85
+	-- Lower number is better efficency
+	--
 
-	timeToFinish INT,
-	-- experience level of a worker
+	efficiency DOUBLE,
 
-	experience VARCHAR(30)
+	defect_rate DOUBLE
 );
 
 --
@@ -166,10 +169,10 @@ DO BEGIN
 	ON
 		Bin.item_id = Item.id
 	SET 
-		Bin.stock_level = Item.starting_stock_level,
-		Bin.currently_replacing = 0
+		Bin.stock_level = Bin.stock_level + Item.default_stock_level,
+		Bin.currently_replacing = FALSE
 	WHERE 
-		Bin.currently_replacing = 1;
+		Bin.currently_replacing = TRUE;
 		
 	--
 	-- Check bins that are low (under 5 items) and tell runner to go get a replacment bin
@@ -180,7 +183,7 @@ DO BEGIN
 	UPDATE 
 		Bin
 	SET
-		currently_replacing = 1
+		currently_replacing = TRUE
 	WHERE
 		stock_level <= @low_bin_stock;
 END$$
@@ -192,51 +195,85 @@ END$$
 CREATE EVENT checkCompletion
 ON SCHEDULE EVERY 1 SECOND
 DO BEGIN
-	-- Update station time
-
-	SET @stationTime = @stationTime + @time_stretch;
-	
 	--
-	-- Start a new product at each station that is done
-	-- Essentially this means updating startedTimeStamp with current time
-	-- TODO: Don't let station start again and don't create product if they're aren't enough items in bins
+	-- Decrease each worker's timeToFinish
 	--
 
 	UPDATE 
 		Station
 	SET
-		startedTimeStamp = @stationTime,
-		completionDuration = 60
+		timeToFinish = timeToFinish - @time_stretch
 	WHERE
-		startedTimeStamp + completionDuration >= @stationTime;
+		timeToFinish > 0;
+		
 		
 	--
-	-- Decrease all bins by the number of stations completed, down to 0
+	-- Todo: insert lamp here
+	-- Use ROW_COUNT to get number of lamps completed
+	--
+		
+	--
+	-- Reset station completion time for stations that are done
+	-- Decrease stock level in bins by 1
 	--
 
 	UPDATE
 		Bin
+	JOIN 
+		Station
+	ON
+		Bin.station_id = Station.id
+	JOIN
+		Worker
+	ON
+		Station.worker_id = Worker.id
 	SET
-		stock_level = GREATEST(stock_level - ROW_COUNT(),0);
+		-- Generates a new timeToFinish based on worker efficency and a random element
+		Station.timeToFinish = 60 * Worker.efficiency * RAND() * 0.1 + Station.timeToFinish,
+		Bin.stock_level = Bin.stock_level - 1
+	WHERE
+		Station.timeToFinish <= 0 AND 
+		Bin.stock_level > 0;
 		
 END$$
 
 DELIMITER &&
 
-CREATE TRIGGER newLamp
+CREATE TRIGGER putIntoTray
 BEFORE INSERT
 ON Lamp
 FOR EACH ROW
-BEGIN
-	IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
-	THEN
-		INSERT INTO Tray (capacity) VALUES (60);
-	END IF;
+	BEGIN
+		IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
+		THEN
+			INSERT INTO Tray (capacity) VALUES (60);
+		END IF;
 
-	SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
-										  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
-	SET NEW.trayID = (SELECT MAX(id) FROM Tray);
-END&&
+		SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
+											  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
+		SET NEW.trayID = (SELECT MAX(id) FROM Tray);
+	END&&
+
+CREATE TRIGGER newLamp
+BEFORE UPDATE
+ON Station
+FOR EACH ROW
+	BEGIN
+		DECLARE dice DOUBLE;
+		DECLARE defected BOOL;
+
+		SET dice := RAND() * 100;
+		
+		IF (dice > (SELECT defect_rate FROM Worker JOIN Station WHERE (NEW.worker_id = Worker.id))) THEN
+			SET defected := false;
+		ELSE
+			SET defected := true;
+		END IF;
+
+		IF (NEW.timeToFinish <= 0) THEN
+			INSERT INTO Lamp (testUnitNumber, trayId, stationId, defected) VALUES ('1', 0, NEW.id, defected);
+		END IF;
+	END&&
 
 DELIMITER ;
 
