@@ -130,11 +130,11 @@ CREATE TABLE Worker(
 	-- Super experienced workers efficiency is 0.85
 	-- Lower number is better efficency
 	--
-	efficiency DOUBLE,
-	
-	-- experience level of a worker
 
-	experience VARCHAR(30)
+
+	efficiency DOUBLE,
+
+	defect_rate DOUBLE
 );
 
 --
@@ -207,13 +207,6 @@ DO BEGIN
 	WHERE
 		timeToFinish > 0;
 		
-		
-	--
-	-- Todo: insert lamp here
-	-- Use ROW_COUNT to get number of lamps completed
-	--
-		
-	--
 	-- Reset station completion time for stations that are done
 	-- Decrease stock level in bins by 1
 	--
@@ -240,20 +233,41 @@ END$$
 
 DELIMITER &&
 
-CREATE TRIGGER newLamp
+CREATE TRIGGER putIntoTray
 BEFORE INSERT
 ON Lamp
 FOR EACH ROW
-BEGIN
-	IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
-	THEN
-		INSERT INTO Tray (capacity) VALUES (60);
-	END IF;
+	BEGIN
+		IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
+		THEN
+			INSERT INTO Tray (capacity) VALUES (60);
+		END IF;
 
-	SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
-										  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
-	SET NEW.trayID = (SELECT MAX(id) FROM Tray);
-END&&
+		SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
+											  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
+		SET NEW.trayID = (SELECT MAX(id) FROM Tray);
+	END&&
+
+CREATE TRIGGER newLamp
+BEFORE UPDATE
+ON Station
+FOR EACH ROW
+	BEGIN
+		DECLARE dice DOUBLE;
+		DECLARE defected BOOL;
+
+		SET dice := RAND() * 100;
+		
+		IF (dice > (SELECT defect_rate FROM Worker JOIN Station WHERE (NEW.worker_id = Worker.id))) THEN
+			SET defected := false;
+		ELSE
+			SET defected := true;
+		END IF;
+
+		IF (NEW.timeToFinish <= 0) THEN
+			INSERT INTO Lamp (testUnitNumber, trayId, stationId, defected) VALUES ('1', 0, NEW.id, defected);
+		END IF;
+	END&&
 
 DELIMITER ;
 
