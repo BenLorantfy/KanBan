@@ -1,11 +1,13 @@
 --
 -- Drop the database if it already exists
 --
+
 DROP DATABASE IF EXISTS KanBan;
 
 --
 -- Create database and use it
 --
+
 CREATE DATABASE KanBan;
 USE KanBan;
 
@@ -19,16 +21,19 @@ SET @time_stretch = 2;
 --
 -- This constant stores the maximum number of items a bin needs to be replaced
 --
+
 SET @low_bin_stock = 5;
 
 --
 -- Enable events
 --
+
 SET GLOBAL event_scheduler = ON;
 
 --
 -- Create item table
 --
+
 CREATE TABLE Item (
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
@@ -43,16 +48,19 @@ CREATE TABLE Item (
 -- Keeps track of what type of item is in bin, and how many of that item are in it
 -- Also has a flag to indicate wether or not the runner is currently replacing it (takes 5 minutes)
 --
+
 CREATE TABLE Bin(
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
 	-- Id of item the bin contains
+
 	item_id INT,
 	
 	-- Station bin belongs to
 	station_id INT,
 	
 	-- Number of items in bin
+
 	stock_level INT,
 	
 	-- Wether or not the tray has been picked up by the runner and is being replaced
@@ -62,6 +70,7 @@ CREATE TABLE Bin(
 --
 -- Create
 --
+
 CREATE TABLE Station (
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	worker_id INT,
@@ -73,10 +82,12 @@ CREATE TABLE Station (
 -- Keeps track of test trays where worker put their completed lamps in.
 -- Has a capacity indicating how many items can be storred in the tray
 --
+
 CREATE TABLE Tray(
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
 	-- How many items can tray fit
+
 	capacity INT
 );
 
@@ -86,16 +97,20 @@ CREATE TABLE Tray(
 -- Has id of a tray where it is storred in, and id of a station where it was assembled
 -- Also, has a bool indicating if lamp if defected or not
 --
+
 CREATE TABLE Lamp(
-	id INT AUTO_INCREMENT PRIMARY KEY,
+	testUnitNumber VARCHAR(10) PRIMARY KEY,
 	
 	-- id of a tray where lamp is storred
+
 	trayId INT,
 	
 	-- id of a station where lamp was assembled
+
 	stationId INT,
 
 	-- is item defected or not
+
 	defected BOOL
 );
 
@@ -105,6 +120,7 @@ CREATE TABLE Lamp(
 -- Each worker has a specific experience level
 -- Also, each worker has a time to finish his job. If time is < 0, worker is not working right now 
 --
+
 CREATE TABLE Worker(
 	id INT AUTO_INCREMENT PRIMARY KEY,
 	
@@ -117,6 +133,7 @@ CREATE TABLE Worker(
 	efficiency DOUBLE,
 	
 	-- experience level of a worker
+
 	experience VARCHAR(30)
 );
 
@@ -128,6 +145,7 @@ CREATE TABLE Worker(
 -- We don't have to use the special delimiter inside the event, because that sql isn't run immediatly, 
 -- and the delimiter is changed back before it runs
 --
+
 DELIMITER $$
 
 --
@@ -135,6 +153,7 @@ DELIMITER $$
 -- If it is so, the bin is marked as needing replacment and runner goes and fetches it (takes 5 minutes)
 -- The runner also replaces any bins that were marked as needing replacment 5 minutes ago
 --
+
 CREATE EVENT checkBins
 ON SCHEDULE EVERY 300 / @time_stretch SECOND
 DO BEGIN
@@ -143,6 +162,7 @@ DO BEGIN
 	-- Replace low bins marked 5 minutes ago with arrived full bins
 	-- This is essentially setting the bin's stock level to full
 	--
+
 	UPDATE 
 		Bin 
 	JOIN
@@ -160,6 +180,7 @@ DO BEGIN
 	-- This is essentially marking the bin as needing replacment
 	-- When the runner comes back, it refills the bins marked as needing replacmenet
 	--
+
 	UPDATE 
 		Bin
 	SET
@@ -171,12 +192,14 @@ END$$
 --
 -- Check if workers have completed a product
 --
+
 CREATE EVENT checkCompletion
 ON SCHEDULE EVERY 1 SECOND
 DO BEGIN
 	--
 	-- Decrease each worker's timeToFinish
 	--
+
 	UPDATE 
 		Station
 	SET
@@ -194,6 +217,7 @@ DO BEGIN
 	-- Reset station completion time for stations that are done
 	-- Decrease stock level in bins by 1
 	--
+
 	UPDATE
 		Bin
 	JOIN 
@@ -214,11 +238,23 @@ DO BEGIN
 		
 END$$
 
-DELIMITER ;
+DELIMITER &&
 
-CREATE TRIGGER placeOnTray
+CREATE TRIGGER newLamp
 BEFORE INSERT
-ON Tray
+ON Lamp
 FOR EACH ROW
 BEGIN
-END;
+	IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
+	THEN
+		INSERT INTO Tray (capacity) VALUES (60);
+	END IF;
+
+	SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
+										  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
+	SET NEW.trayID = (SELECT MAX(id) FROM Tray);
+END&&
+
+DELIMITER ;
+
+INSERT INTO Tray (capacity) VALUES (60);
