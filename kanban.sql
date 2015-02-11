@@ -16,7 +16,7 @@ USE KanBan;
 -- (e.g. "2" twice as fast, "3" thrice as fast, "0.5" half as fast)
 -- All times should be in seconds because the database engine doesn't like intervals less than 1
 --
-SET @time_stretch = 2;
+SET @time_stretch = 4;
 
 --
 -- This constant stores the maximum number of items a bin needs to be replaced
@@ -155,7 +155,7 @@ DELIMITER $$
 --
 
 CREATE EVENT checkBins
-ON SCHEDULE EVERY 300 / @time_stretch SECOND
+ON SCHEDULE EVERY 300 / 10 SECOND
 DO BEGIN
 
 	--
@@ -186,8 +186,9 @@ DO BEGIN
 	SET
 		currently_replacing = TRUE
 	WHERE
-		stock_level <= @low_bin_stock;
+		stock_level <= 5;
 END$$
+
 
 --
 -- Check if workers have completed a product
@@ -203,7 +204,7 @@ DO BEGIN
 	UPDATE 
 		Station
 	SET
-		timeToFinish = timeToFinish - @time_stretch
+		timeToFinish = timeToFinish - 10
 	WHERE
 		timeToFinish > 0;
 		
@@ -212,63 +213,119 @@ DO BEGIN
 	--
 
 	UPDATE
-		Bin
-	JOIN 
 		Station
-	ON
-		Bin.station_id = Station.id
 	JOIN
 		Worker
 	ON
 		Station.worker_id = Worker.id
 	SET
 		-- Generates a new timeToFinish based on worker efficency and a random element
-		Station.timeToFinish = 60 * Worker.efficiency * RAND() * 0.1 + Station.timeToFinish,
-		Bin.stock_level = Bin.stock_level - 1
+		Station.timeToFinish = 60 * Worker.efficiency * (0.9 + RAND() * 0.2) + Station.timeToFinish
 	WHERE
 		Station.timeToFinish <= 0 AND 
-		Bin.stock_level > 0;
+		(SELECT MIN(stock_level) FROM Bin WHERE Bin.station_id = Station.id) > 0;
 		
 END$$
 
-DELIMITER &&
+--
+-- Trigger calls upon attempt to add finished lamp into tray
+-- This trigger generates correct testUnitNumber and chooses a Tray to put in
+-- If Tray is full new tray is created
+--
 
 CREATE TRIGGER putIntoTray
 BEFORE INSERT
 ON Lamp
 FOR EACH ROW
 	BEGIN
+		-- If last tray has 60+ items
+
 		IF ((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)) >= 60)
 		THEN
+			-- Add a new tray of default capacity
 			INSERT INTO Tray (capacity) VALUES (60);
 		END IF;
 
+		-- Generate unit test number (big scarry function)
 		SET NEW.testUnitNumber = CONCAT('FL', (SELECT LPAD((SELECT MAX(id) FROM Tray), 6, '0')), 
 											  (SELECT LPAD((SELECT COUNT(*) FROM Lamp WHERE Lamp.trayID = (SELECT MAX(id) FROM Tray)), 2, '0')));
+		-- Insert into the last tray
 		SET NEW.trayID = (SELECT MAX(id) FROM Tray);
-	END&&
+END$$
+
+--
+-- Trigger calls upon attempt to update Station
+-- This trigger generates defect status and inserts a new lamp
+-- Also, it takes new items from bins
+--
 
 CREATE TRIGGER newLamp
-BEFORE UPDATE
+AFTER UPDATE
 ON Station
 FOR EACH ROW
 	BEGIN
-		DECLARE dice DOUBLE;
-		DECLARE defected BOOL;
+		DECLARE dice DOUBLE;	-- dice for random
+		DECLARE defected BOOL;	-- defect status variable
 
-		SET dice := RAND() * 100;
-		
-		IF (dice > (SELECT defect_rate FROM Worker JOIN Station WHERE (NEW.worker_id = Worker.id))) THEN
-			SET defected := false;
-		ELSE
-			SET defected := true;
-		END IF;
+		IF (NEW.timeToFinish <= 0) THEN		-- do work only if work is finished
+			SET dice := RAND() * 100;		-- Throw a dice from 0 to 100
+			
+			-- if received value is less than defect rate than there is a defect
+			IF (dice > (SELECT defect_rate FROM Worker WHERE Worker.id = NEW.worker_id)) THEN
+				SET defected := false;
+			ELSE
+				SET defected := true;
+			END IF;
 
-		IF (NEW.timeToFinish <= 0) THEN
+			-- insert new lamp. We don't care about testUnitNumber and Tray number since they are going to be generated
 			INSERT INTO Lamp (testUnitNumber, trayId, stationId, defected) VALUES ('1', 0, NEW.id, defected);
+
+			-- take one item from each bin
+			UPDATE 
+				Bin
+			SET
+				Bin.stock_level = Bin.stock_level - 1
+			WHERE
+				Bin.station_id = NEW.id;
 		END IF;
-	END&&
+END$$
 
 DELIMITER ;
 
 INSERT INTO Tray (capacity) VALUES (60);
+
+INSERT INTO Item (name, default_stock_level)  VALUES ('Harness', 55);
+INSERT INTO Item (name, default_stock_level)  VALUES ('Rflector', 35);
+INSERT INTO Item (name, default_stock_level)  VALUES ('Housing', 24);
+INSERT INTO Item (name, default_stock_level)  VALUES ('Lens', 40);
+INSERT INTO Item (name, default_stock_level)  VALUES ('Bulb', 60);
+INSERT INTO Item (name, default_stock_level)  VALUES ('Bezel', 75);
+
+INSERT INTO Worker(efficiency, defect_rate) VALUES (1, 0.5);
+INSERT INTO Worker(efficiency, defect_rate) VALUES (0.85, 0.15);
+INSERT INTO Worker(efficiency, defect_rate) VALUES (1.5, 0.85);
+
+INSERT INTO Station(worker_id, timeToFinish) VALUES (1, 60);
+INSERT INTO Station(worker_id, timeToFinish) VALUES (2, 60);
+INSERT INTO Station(worker_id, timeToFinish) VALUES (3, 60);
+
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (1, 1, 55, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (2, 1, 35, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (3, 1, 24, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (4, 1, 40, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (5, 1, 60, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (6, 1, 75, false);
+
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (1, 2, 55, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (2, 2, 35, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (3, 2, 24, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (4, 2, 40, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (5, 2, 60, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (6, 2, 75, false);
+
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (1, 3, 55, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (2, 3, 35, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (3, 3, 24, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (4, 3, 40, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (5, 3, 60, false);
+INSERT INTO Bin(item_id, station_id, stock_level, currently_replacing) VALUES (6, 3, 75, false);
